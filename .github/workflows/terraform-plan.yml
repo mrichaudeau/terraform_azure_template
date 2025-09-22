@@ -1,0 +1,217 @@
+# Terraform Plan Workflow
+# Generates and displays Terraform execution plan on pull requests
+
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '**.tfvars.json'
+      - '.github/workflows/terraform-plan.yml'
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.0
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Initialize Terraform
+        working-directory: ./environments/${{ matrix.environment }}
+        run: |
+          terraform init \
+            -backend-config="storage_account_name=${{ secrets.TERRAFORM_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=terraform-state" \
+            -backend-config="key=${{ matrix.environment }}/python-sql-webapp.tfstate" \
+            -backend-config="resource_group_name=${{ secrets.TERRAFORM_RESOURCE_GROUP }}"
+
+      - name: Generate Terraform Plan
+        working-directory: ./environments/${{ matrix.environment }}
+        run: |
+          terraform plan \
+            -var="environmentName=${{ matrix.environment }}" \
+            -var="location=East US" \
+            -out=${{ matrix.environment }}.tfplan \
+            -detailed-exitcode
+        continue-on-error: true
+        id: plan
+
+      - name: Save Plan Output
+        working-directory: ./environments/${{ matrix.environment }}
+        run: |
+          terraform show -no-color ${{ matrix.environment }}.tfplan > ${{ matrix.environment }}-plan.txt
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ matrix.environment }}
+          path: ./environments/${{ matrix.environment }}/${{ matrix.environment }}-plan.txt
+          retention-days: 30
+
+      - name: Comment Plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const environment = '${{ matrix.environment }}';
+            const planPath = `./environments/${environment}/${environment}-plan.txt`;
+            
+            let plan = '';
+            try {
+              plan = fs.readFileSync(planPath, 'utf8');
+            } catch (error) {
+              plan = `Error reading plan file: ${error.message}`;
+            }
+            
+            // Truncate plan if too long (GitHub comment limit)
+            if (plan.length > 50000) {
+              plan = plan.substring(0, 50000) + '\n\n... (truncated)';
+            }
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.login === 'github-actions[bot]' && 
+              comment.body.includes(`Terraform Plan - ${environment}`)
+            );
+            
+            const planStatus = '${{ steps.plan.outcome }}' === 'success' ? 'Plan Generated Successfully' : 'Plan Generation Failed';
+            const planExitCode = '${{ steps.plan.outputs.exitcode }}';
+            let planSummary = '';
+            
+            if (planExitCode === '0') {
+              planSummary = '📋 No changes detected';
+            } else if (planExitCode === '2') {
+              planSummary = '📝 Changes detected';
+            } else {
+              planSummary = '❌ Plan generation failed';
+            }
+            
+            const body = `## 📋 Terraform Plan - ${environment}
+            
+            **Status:** ${planSummary}
+            **Exit Code:** ${planExitCode}
+            
+            <details>
+            <summary>📊 Terraform Plan Output</summary>
+            
+            \`\`\`hcl
+            ${plan}
+            \`\`\`
+            
+            </details>
+            
+            **🔍 Review Guidelines:**
+            - ✅ Verify that only expected resources are being created/modified/destroyed
+            - ✅ Check that sensitive data is properly protected
+            - ✅ Ensure compliance with security and naming standards
+            - ✅ Validate that changes align with the Well-Architected Framework
+            
+            **Environment:** ${environment}
+            **Timestamp:** ${new Date().toISOString()}
+            `;
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+  plan-summary:
+    name: Plan Summary
+    runs-on: ubuntu-latest
+    needs: plan
+    if: always()
+    
+    steps:
+      - name: Create Plan Summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const environments = ['dev', 'staging', 'prod'];
+            const results = {
+              dev: '${{ needs.plan.result }}',
+              staging: '${{ needs.plan.result }}', 
+              prod: '${{ needs.plan.result }}'
+            };
+            
+            let summary = '## 📊 Terraform Plan Summary\n\n';
+            summary += '| Environment | Status | Action Required |\n';
+            summary += '|-------------|--------|----------------|\n';
+            
+            environments.forEach(env => {
+              const status = results[env] === 'success' ? '✅ Success' : '❌ Failed';
+              const action = results[env] === 'success' ? 'Ready for review' : 'Fix issues before deployment';
+              summary += `| ${env} | ${status} | ${action} |\n`;
+            });
+            
+            summary += '\n**Next Steps:**\n';
+            summary += '1. Review the individual plan outputs above\n';
+            summary += '2. Ensure all changes are expected and approved\n';
+            summary += '3. Merge the PR to trigger deployment (if auto-deploy is enabled)\n';
+            summary += '4. Monitor the deployment progress in the Actions tab\n';
+            
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const summaryComment = comments.find(comment => 
+              comment.user.login === 'github-actions[bot]' && 
+              comment.body.includes('Terraform Plan Summary')
+            );
+            
+            if (summaryComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: summaryComment.id,
+                body: summary
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary
+              });
+            }
