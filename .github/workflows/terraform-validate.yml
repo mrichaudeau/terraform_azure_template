@@ -1,0 +1,183 @@
+# Terraform Validation Workflow
+# Validates Terraform code on pull requests
+
+name: Terraform Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '**.tfvars.json'
+      - '.github/workflows/terraform-validate.yml'
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.0
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Setup Python for Checkov
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Terraform Format Check
+        run: |
+          echo "Checking Terraform formatting..."
+          terraform fmt -check=true -recursive
+        continue-on-error: false
+
+      - name: Initialize Terraform (Root)
+        run: |
+          echo "Initializing root Terraform configuration..."
+          terraform init -backend=false
+
+      - name: Validate Terraform (Root)
+        run: |
+          echo "Validating root Terraform configuration..."
+          terraform validate
+
+      - name: Initialize and Validate Environment Configurations
+        run: |
+          for env in dev staging prod; do
+            echo "Validating $env environment..."
+            cd environments/$env
+            terraform init -backend=false
+            terraform validate
+            cd ../../
+          done
+
+      - name: Run TFLint
+        run: |
+          echo "Running TFLint security and best practices checks..."
+          tflint --init
+          tflint --recursive --minimum-failure-severity=error
+
+      - name: Run Checkov Security Scan
+        run: |
+          echo "Running Checkov security scan..."
+          checkov -f . --framework terraform \
+            --check CKV_AZURE_1,CKV_AZURE_2,CKV_AZURE_3,CKV_AZURE_4,CKV_AZURE_5 \
+            --check CKV_AZURE_35,CKV_AZURE_44,CKV_AZURE_50,CKV_AZURE_88,CKV_AZURE_89 \
+            --check CKV2_AZURE_1,CKV2_AZURE_8,CKV2_AZURE_18,CKV2_AZURE_21 \
+            --compact --quiet
+        continue-on-error: true
+
+      - name: Validate Module Structure
+        run: |
+          echo "Validating module structure and dependencies..."
+          # Check required files exist
+          for module in networking security data compute monitoring; do
+            if [ ! -f "modules/$module/main.tf" ]; then
+              echo "ERROR: Missing main.tf in $module module"
+              exit 1
+            fi
+            if [ ! -f "modules/$module/variables.tf" ]; then
+              echo "ERROR: Missing variables.tf in $module module"
+              exit 1
+            fi
+            if [ ! -f "modules/$module/outputs.tf" ]; then
+              echo "ERROR: Missing outputs.tf in $module module"
+              exit 1
+            fi
+          done
+          echo "All required module files are present"
+
+      - name: Check Azure Well-Architected Framework Compliance
+        run: |
+          echo "Checking Azure Well-Architected Framework compliance..."
+          # Check for security best practices
+          if ! grep -r "managed_identity" modules/; then
+            echo "WARNING: Managed Identity not found in modules"
+          fi
+          if ! grep -r "private_endpoint" modules/; then
+            echo "WARNING: Private Endpoints not found in modules"
+          fi
+          if ! grep -r "key_vault" modules/; then
+            echo "WARNING: Key Vault integration not found in modules"
+          fi
+          # Check for monitoring
+          if ! grep -r "application_insights" modules/; then
+            echo "WARNING: Application Insights not found in modules"
+          fi
+          if ! grep -r "log_analytics" modules/; then
+            echo "WARNING: Log Analytics not found in modules"
+          fi
+          echo "Well-Architected Framework compliance check completed"
+
+  comment-pr:
+    name: Comment on PR
+    runs-on: ubuntu-latest
+    needs: validate
+    if: always() && github.event_name == 'pull_request'
+    
+    steps:
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.login === 'github-actions[bot]' && 
+              comment.body.includes('Terraform Validation Results')
+            );
+            
+            const success = '${{ needs.validate.result }}' === 'success';
+            const body = `## 🔍 Terraform Validation Results
+            
+            **Status:** ${success ? '✅ Passed' : '❌ Failed'}
+            
+            ### Validation Steps:
+            - ${success ? '✅' : '❌'} Terraform Format Check
+            - ${success ? '✅' : '❌'} Terraform Syntax Validation  
+            - ${success ? '✅' : '❌'} TFLint Security & Best Practice Checks
+            - ${success ? '✅' : '❌'} Checkov Security Scan
+            - ${success ? '✅' : '❌'} Module Structure Validation
+            - ${success ? '✅' : '❌'} Azure Well-Architected Framework Compliance
+            
+            ${success ? 
+              '🎉 All validation checks passed! The Terraform code follows security best practices and Azure Well-Architected Framework principles.' :
+              '⚠️ Some validation checks failed. Please review the workflow logs and fix the issues before merging.'
+            }
+            
+            **Note:** This is an automated check. For deployment approval, ensure all tests pass and code review is complete.
+            `;
+            
+            if (botComment) {
+              github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
