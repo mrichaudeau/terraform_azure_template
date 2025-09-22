@@ -1,240 +1,181 @@
-# Terraform Azure Template - GitHub Copilot Workspace Instructions
+# Terraform Azure Template - Developer Instructions
 
-This repository is a **template for automated Azure Terraform IaC generation** using GitHub Copilot Workspace. When assigned to GitHub issues, Copilot should generate complete, production-ready Azure infrastructure following Well-Architected Framework principles.
+Always follow these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.
 
-## Repository Purpose & Workflow
+This repository is a **template for automated Azure Terraform IaC generation**. After cloning, use it as a foundation to generate complete, production-ready Azure infrastructure following Well-Architected Framework principles.
 
-**Template Repository Goal**: Enable rapid, automated generation of enterprise-grade Azure Terraform projects via GitHub Copilot Workspace.
+## Working Effectively
 
-**Expected Workflow**:
-1. User clones this template repository
-2. User creates GitHub issue describing their infrastructure requirements
-3. User assigns GitHub Copilot agent to the issue
-4. **Copilot generates complete project**: Terraform modules, environments, GitHub Actions, documentation
-5. User deploys infrastructure immediately using generated CI/CD pipeline
+### Bootstrap the Development Environment
+- Install all required tools in this exact order:
+  - Install Terraform: `wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list && sudo apt update && sudo apt install -y terraform` -- takes 3-5 minutes. NEVER CANCEL. Set timeout to 10+ minutes.
+  - Install TFLint: `wget https://github.com/terraform-linters/tflint/releases/download/v0.53.0/tflint_linux_amd64.zip -O /tmp/tflint.zip && cd /tmp && unzip tflint.zip && sudo mv tflint /usr/local/bin/` -- takes 30 seconds.
+  - Install Checkov: `pip3 install checkov --break-system-packages` -- takes 3-4 minutes. NEVER CANCEL. Set timeout to 10+ minutes.
+  - Azure CLI is pre-installed in most environments. Verify with: `az --version`
 
-**Copilot Agent Responsibilities**:
-- Generate complete Terraform project structure based on issue requirements
-- Create environment-specific configurations (dev/staging/prod)
-- Generate GitHub Actions workflows for validation and deployment
-- Apply Azure Well-Architected Framework principles across all 5 pillars
-- Ensure security-first design with managed identities and private endpoints
+### Build and Validate Terraform Code
+- **ALWAYS run the complete validation pipeline** before committing changes:
+  - `terraform fmt -check=true -recursive` -- validates formatting, takes <1 second
+  - `terraform init` -- initializes backend and providers, takes 2-3 seconds
+  - `terraform validate` -- validates syntax, takes <1 second  
+  - `tflint --config=.tflint.hcl` -- runs linting rules, takes <1 second
+  - `checkov -d . --framework terraform --quiet` -- security scanning, takes 1-2 seconds (WARNING: fails with network connectivity errors but continues)
+  - `terraform plan` -- generates execution plan, takes 20-25 seconds (requires Azure authentication)
 
-## Key Patterns & Conventions
+### Authentication Requirements
+- **Azure CLI login required** for terraform plan/apply: Run `az login` first
+- **Terraform planning fails without authentication** with error: "Please run 'az login' to setup account"
+- **Provider configuration** must include `features {}` block or terraform plan fails
+- Use `skip_provider_registration = true` for read-only operations (deprecated in v5.0)
 
-### Azure Well-Architected Framework Integration
-- **Always implement all 5 pillars**: Security (managed identities, private endpoints), Reliability (multi-region, availability zones), Cost Optimization (tagging, right-sizing), Operational Excellence (IaC, monitoring), Performance Efficiency (auto-scaling, baselines)
-- **Pattern Analysis First**: Before generating code, analyze the requested tasks to identify best practices and potential pitfalls and make research on Azure services as needed based on the links provided in the documentation section.
+### Timing and Timeouts
+- **Tool Installation**: 10+ minutes total -- NEVER CANCEL these operations
+- **Terraform operations**: Always complete quickly (<30 seconds) except `terraform plan` with Azure API calls
+- **Validation pipeline**: Complete in under 5 seconds when run locally
+- **TFLint Azure plugin installation**: FAILS due to GitHub API rate limits -- use basic rules only
 
-### Terraform Structure Conventions (from CLAUDE.md)
+## Validation Scenarios
+
+### Always Test These Scenarios After Making Changes
+- **Create a test Terraform module** with basic Azure resource (e.g., resource group)
+- **Run complete validation pipeline** to ensure all tools work correctly
+- **Test terraform init and validate** on the generated code
+- **Verify terraform fmt** runs without errors on all .tf files
+- **Ensure TFLint passes** with basic configuration (Azure plugin may not be available)
+
+### Manual Validation Steps
+- Create test infrastructure in structure: `environments/dev/`, `modules/resource-group/`
+- Include proper `versions.tf` with provider configuration
+- Test module referencing works correctly
+- Verify tags and naming conventions are applied
+
+## Common Tasks
+
+### Repository Structure
 ```
-azure-infrastructure/
-├── environments/           # Environment-specific configurations
-│   ├── prod/dev/           # Separate folders per environment
-├── modules/                # Reusable Terraform modules
-│   ├── networking/app-service/sql-database/
-├── backend.tf             # Azure Storage backend configuration
-└── versions.tf            # Provider version pinning
-```
-
-### Security-First Approach
-- **Default to managed identities** for all service-to-service authentication
-- **Private endpoints mandatory** for all PaaS services unless explicitly justified
-- **Azure Key Vault integration** for all secrets, certificates, connection strings
-- **Network Security Groups** with restrictive rules by default
-
-### Naming & Tagging Standards
-- Follow **Microsoft Cloud Adoption Framework (CAF)** naming conventions
-- Use **Azure naming module** for consistency: `module "naming" { source = "Azure/naming/azurerm" }`
-- **Required tags**: Environment, Project, Owner, CostCenter, BusinessUnit, Criticality, DataClass, ManagedBy, LastModified
-
-## Critical Development Workflows
-
-### Terraform Validation Pipeline (Always Required)
-```bash
-terraform fmt -check=true              # Format validation
-terraform validate                     # Syntax validation  
-tflint --config=.tflint.hcl           # Azure-specific linting
-checkov -f . --framework terraform    # Security scanning
-terraform plan -out=tfplan            # Plan generation
-```
-
-### Provider Configuration Pattern
-```hcl
-terraform {
-  required_providers {
-    azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" }
-  }
-  backend "azurerm" { /* Azure Storage backend */ }
-}
-
-provider "azurerm" {
-  features {
-    key_vault { purge_soft_delete_on_destroy = true }
-    resource_group { prevent_deletion_if_contains_resources = false }
-  }
-}
+.
+├── .git/
+├── .github/
+│   └── copilot-instructions.md
+└── README.md
 ```
 
-## Critical Anti-Patterns to Avoid
-
-- **Never hardcode secrets** - Always use Key Vault references
-- **Never skip global uniqueness** for storage accounts, web apps (use random suffix)  
-- **Never use unpinned provider versions** - Always pin to specific versions
-- **Never expose PaaS services publicly** - Use private endpoints by default
-- **Never use local state** for team environments - Use Azure Storage backend
-- **Never skip comprehensive tagging** - Required for governance and cost management
-
-## Integration Points & Dependencies
-
-### External Dependencies
-- **Azure subscription** with appropriate RBAC permissions
-- **Azure Storage Account** for Terraform state backend  
-- **Azure Key Vault** for secrets management
-- **Azure AD** for managed identities and RBAC
-
-### Required Tools & Validation
-- **TFLint** with Azure ruleset for best practices validation
-- **Checkov** for security and compliance scanning
-- **Azure CLI** for authentication and resource management
-
-## GitHub Copilot Agent Instructions
-
-When assigned to a GitHub issue requesting Azure infrastructure, follow this workflow:
-
-### 1. Issue Analysis & Project Planning
-- Parse the GitHub issue to understand infrastructure requirements
-- Identify Azure services needed (App Service, AKS, databases, storage, etc.)
-- Determine environment needs (dev/staging/prod configurations)
-- Plan module structure based on services and dependencies
-
-### 2. Generate Complete Project Structure
-Create the full Terraform project following this structure:
+### Required Project Structure (when generating infrastructure)
 ```
 ├── environments/
 │   ├── dev/
 │   │   ├── main.tf
 │   │   ├── variables.tf
 │   │   ├── terraform.tfvars
+│   │   ├── versions.tf
 │   │   └── outputs.tf
 │   ├── staging/
 │   └── prod/
 ├── modules/
 │   ├── networking/
-│   ├── compute/ (app-service, aks, vm)
-│   ├── data/ (sql, cosmos, storage)
-│   └── security/ (keyvault, nsg)
+│   ├── compute/
+│   ├── data/
+│   └── security/
 ├── .github/workflows/
 │   ├── terraform-validate.yml
 │   ├── terraform-plan.yml
 │   └── terraform-deploy.yml
+├── .tflint.hcl
 ├── backend.tf
 ├── versions.tf
 ├── locals.tf
 └── README.md
 ```
 
-### 3. Apply Azure Well-Architected Framework
-Every generated resource must address the 5 pillars:
+### Essential TFLint Configuration (.tflint.hcl)
+```hcl
+rule "terraform_deprecated_interpolation" {
+  enabled = true
+}
+
+rule "terraform_unused_declarations" {
+  enabled = true
+}
+
+rule "terraform_documented_outputs" {
+  enabled = true
+}
+
+rule "terraform_documented_variables" {
+  enabled = true
+}
+
+rule "terraform_naming_convention" {
+  enabled = true
+  format  = "snake_case"
+}
+```
+
+### Standard Provider Configuration
+```hcl
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+  skip_provider_registration = true  # deprecated in v5.0
+}
+```
+
+## Critical Workflows
+
+### Always Follow Azure Well-Architected Framework
 - **Security**: Managed identities, private endpoints, Key Vault integration
-- **Reliability**: Multi-region, availability zones, backup strategies
+- **Reliability**: Multi-region, availability zones, backup strategies  
 - **Cost Optimization**: Appropriate SKUs, tagging strategy, auto-scaling
 - **Operational Excellence**: Monitoring, alerting, Infrastructure as Code
 - **Performance Efficiency**: Right-sized resources, performance baselines
 
-### 4. Generate GitHub Actions Workflows
-Create complete CI/CD pipelines with:
-- **Validation workflow**: terraform fmt, validate, tflint, checkov
-- **Planning workflow**: terraform plan on PR creation
-- **Deployment workflow**: terraform apply with environment promotion
-- **Security scanning**: Azure security best practices validation
-
-### 5. Implementation Standards
-- **Always use Azure Storage backend** for Terraform state
-- **Pin provider versions** to avoid breaking changes
-- **Follow CAF naming conventions** using Azure naming module
-- **Implement comprehensive tagging** for governance and cost management
-- **Default to private connectivity** with private endpoints
-- **Include monitoring and alerting** for all critical resources
-
-## Required GitHub Actions Templates
-
-Generate these workflow files in `.github/workflows/`:
-
-### terraform-validate.yml (PR Validation)
-```yaml
-name: Terraform Validate
-on: [pull_request]
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform fmt -check
-      - run: terraform validate
-      - run: tflint --config=.tflint.hcl
-      - run: checkov -f . --framework terraform
+### Required Tags for All Resources
+```hcl
+tags = {
+  Environment = "dev|staging|prod"
+  Project     = "project-name"
+  Owner       = "team-name"
+  ManagedBy   = "terraform"
+}
 ```
 
-### terraform-deploy.yml (Environment Deployment)
-```yaml
-name: Deploy Infrastructure
-on:
-  push:
-    branches: [main]
-env:
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-```
+### Validation Commands That May Fail
+- **TFLint Azure plugin**: `tflint --init` fails with GitHub API rate limits -- use basic rules only
+- **Checkov online features**: Network connectivity issues cause warnings but do not stop execution
+- **Terraform plan**: Requires `az login` authentication or will fail immediately
 
-## Deliverables Checklist
+## Known Issues and Workarounds
 
-When completing an infrastructure request, ensure all items are generated:
+### Tool Installation Issues
+- **Terraform**: Standard apt installation works reliably
+- **TFLint**: Use direct GitHub release download due to install script failures
+- **Checkov**: Network warnings are normal and do not affect functionality
 
-**Core Infrastructure**:
-- [ ] Complete Terraform modules for all requested Azure services
-- [ ] Environment-specific configurations (dev/staging/prod)
-- [ ] Backend configuration with Azure Storage
-- [ ] Comprehensive variable definitions with validation
+### Network Connectivity Limitations
+- **TFLint Azure plugin**: Cannot install due to GitHub API access restrictions
+- **Checkov API**: Prisma Cloud API access fails but local scanning works
+- **Azure authentication**: Must use `az login` for any Azure API operations
 
-**Security & Governance**:
-- [ ] Managed identities for all service-to-service authentication
-- [ ] Private endpoints for all PaaS services
-- [ ] Azure Key Vault integration for secrets management
-- [ ] Comprehensive tagging strategy implementation
+### Git Operations
+- Repository starts with only README.md and .github/copilot-instructions.md
+- Use standard git commands for version control
+- Generated infrastructure should be committed to version control
+- Always check `git status` before committing to verify file scope
 
-**CI/CD & Automation**:
-- [ ] GitHub Actions workflows for validation and deployment
-- [ ] Security scanning integration (Checkov, TFLint)
-- [ ] Environment promotion workflows
-- [ ] Deployment documentation and runbooks
+## Working with GitHub Copilot
 
-**Monitoring & Operations**:
-- [ ] Azure Monitor integration with alerting
-- [ ] Log Analytics workspace configuration
-- [ ] Application Insights for application monitoring
-- [ ] Backup and disaster recovery procedures
-
-## 📚 Azure Documentation and Resources
-
-### Essential Azure References
-- **Azure Well-Architected Framework**: https://learn.microsoft.com/en-us/azure/well-architected/
-- **Azure Architecture Center**: https://learn.microsoft.com/en-us/azure/architecture/browse/
-- **AzureRM Provider Documentation**: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
-- **Azure Verified Modules**: https://azure.github.io/Azure-Verified-Modules/
-- **Azure Naming Conventions**: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming
-
-### Azure Security and Governance
-- **Azure Key Vault Best Practices**: https://learn.microsoft.com/en-us/azure/key-vault/general/best-practices
-- **Azure Private Endpoint Documentation**: https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview
-- **Azure RBAC Documentation**: https://learn.microsoft.com/en-us/azure/role-based-access-control/
-
-### Terraform Azure Tools
-- **TFLint Azure Rules**: https://github.com/terraform-linters/tflint-ruleset-azurerm
-- **Checkov Azure Checks**: https://www.checkov.io/5.Policy%20Index/terraform.html
-- **Azure Terraform Modules**: https://registry.terraform.io/browse/modules?provider=azurerm
-
-**Final Goal**: User should be able to run `terraform apply` and deploy production-ready Azure infrastructure immediately after Copilot generates the project.
+### When Generating Azure Infrastructure
+- **Always validate** generated code with the complete pipeline
+- **Include provider configuration** in every environment
+- **Follow naming conventions** using snake_case for resources
+- **Apply security best practices** with private endpoints and managed identities
+- **Test terraform init and validate** on generated modules before committing
