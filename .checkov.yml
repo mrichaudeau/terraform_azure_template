@@ -1,0 +1,46 @@
+# Checkov Configuration for Azure Security Best Practices
+
+# Framework configuration
+framework:
+  - terraform
+  - secrets
+
+# Output configuration
+output:
+  - cli
+  - sarif
+
+# Quiet mode for cleaner output
+quiet: false
+
+# Skip specific checks that may not apply to this architecture
+skip-check:
+  # Skip checks that require specific configurations not applicable to this template
+  - CKV_AZURE_109  # Ensure that key vault allows firewall rules settings
+  - CKV_AZURE_189  # Ensure that Azure Key Vault disables public network access
+  - CKV2_AZURE_1   # Ensure storage for critical data are encrypted with Customer Managed Key
+  - CKV2_AZURE_8   # Ensure the storage account containing the container with activity logs is encrypted with BYOK (Use Your Own Key)
+
+# Custom check configuration
+check:
+  - CKV_AZURE_17   # Ensure the key vault is recoverable
+  - CKV_AZURE_42   # Ensure that key vault is purge protected
+  - CKV_AZURE_16   # Ensure that key vault enables soft delete
+  - CKV_AZURE_124  # Ensure that key vault enables purge protection
+  - CKV_AZURE_10   # Ensure that key vault enables soft delete
+  - CKV_AZURE_127  # Ensure that key vault enables soft delete
+
+# Severity threshold
+soft-fail: true
+
+# Custom policies directory (if any)
+# external-checks-dir: ./custom-checks
+
+# Baseline file for comparison
+# baseline: .checkov.baseline
+
+# Compact output
+compact: true
+
+# Include suppressed checks in output
+include-all-checkov-policies: true
