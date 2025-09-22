@@ -1,0 +1,188 @@
+name: Terraform Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/terraform-*.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        environment: [dev, staging, prod]
+    
+    defaults:
+      run:
+        working-directory: ./environments/${{ matrix.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+      
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      
+      - name: Setup Checkov
+        run: |
+          pip install checkov
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: terraform init -backend=false
+      
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+      
+      - name: Setup TFLint config
+        run: |
+          cat > .tflint.hcl << 'EOF'
+          plugin "azurerm" {
+            enabled = true
+            version = "0.25.1"
+            source  = "github.com/terraform-linters/tflint-ruleset-azurerm"
+          }
+          
+          rule "terraform_deprecated_interpolation" {
+            enabled = true
+          }
+          
+          rule "terraform_unused_declarations" {
+            enabled = true
+          }
+          
+          rule "terraform_comment_syntax" {
+            enabled = true
+          }
+          
+          rule "terraform_documented_outputs" {
+            enabled = true
+          }
+          
+          rule "terraform_documented_variables" {
+            enabled = true
+          }
+          
+          rule "terraform_typed_variables" {
+            enabled = true
+          }
+          
+          rule "terraform_module_pinned_source" {
+            enabled = true
+          }
+          
+          rule "terraform_naming_convention" {
+            enabled = true
+            format  = "snake_case"
+          }
+          
+          rule "terraform_standard_module_structure" {
+            enabled = true
+          }
+          EOF
+      
+      - name: TFLint Init
+        run: tflint --init
+      
+      - name: TFLint
+        id: tflint
+        run: tflint --config=.tflint.hcl --format=compact
+        continue-on-error: true
+      
+      - name: Run Checkov
+        id: checkov
+        run: |
+          checkov -d . \
+            --framework terraform \
+            --output cli \
+            --output sarif \
+            --output-file-path console,checkov-results.sarif \
+            --soft-fail
+        continue-on-error: true
+      
+      - name: Upload Checkov results to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: environments/${{ matrix.environment }}/checkov-results.sarif
+          category: checkov-${{ matrix.environment }}
+      
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Environment: ${{ matrix.environment }}
+            
+            #### Terraform Format and Style 🖌 \`${{ steps.fmt.outcome }}\`
+            
+            #### Terraform Initialization ⚙️ \`${{ steps.init.outcome }}\`
+            
+            #### Terraform Validation 🤖 \`${{ steps.validate.outcome }}\`
+            
+            <details><summary>Validation Output</summary>
+            
+            \`\`\`\n
+            ${{ steps.validate.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            #### TFLint 🔍 \`${{ steps.tflint.outcome }}\`
+            
+            #### Checkov Security Scan 🛡️ \`${{ steps.checkov.outcome }}\`
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'

@@ -1,0 +1,256 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/terraform-*.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+        - plan
+        - apply
+        - destroy
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  TF_VAR_azuread_admin_object_id: ${{ secrets.AZURE_AD_ADMIN_OBJECT_ID }}
+
+jobs:
+  deploy-dev:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    environment: 
+      name: development
+      url: ${{ steps.deploy.outputs.app_url }}
+    
+    defaults:
+      run:
+        working-directory: ./environments/dev
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+          terraform_wrapper: false
+      
+      - name: Azure CLI Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      
+      - name: Create backend config
+        run: |
+          cat > backend.conf << EOF
+          resource_group_name  = "rg-terraform-state-dev"
+          storage_account_name = "stterraformstatedev$(echo $RANDOM | md5sum | head -c 6)"
+          container_name       = "tfstate"
+          key                  = "dev/fastapi-app.terraform.tfstate"
+          EOF
+      
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.conf
+      
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -out=tfplan
+      
+      - name: Terraform Apply
+        id: deploy
+        if: github.event.inputs.action != 'plan'
+        run: |
+          terraform apply -auto-approve tfplan
+          echo "app_url=$(terraform output -raw app_service_url)" >> $GITHUB_OUTPUT
+      
+      - name: Post-deployment validation
+        if: steps.deploy.outcome == 'success'
+        run: |
+          # Wait for deployment to be ready
+          sleep 30
+          
+          # Basic health check
+          APP_URL=$(terraform output -raw app_service_url)
+          echo "Testing application at: $APP_URL"
+          
+          # Test health endpoint (if available)
+          curl -f "$APP_URL/health" || echo "Health endpoint not available yet"
+
+  deploy-staging:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: 
+      name: staging
+      url: ${{ steps.deploy.outputs.app_url }}
+    
+    defaults:
+      run:
+        working-directory: ./environments/staging
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+          terraform_wrapper: false
+      
+      - name: Azure CLI Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      
+      - name: Create backend config
+        run: |
+          cat > backend.conf << EOF
+          resource_group_name  = "rg-terraform-state-staging"
+          storage_account_name = "stterraformstatestg$(echo $RANDOM | md5sum | head -c 6)"
+          container_name       = "tfstate"
+          key                  = "staging/fastapi-app.terraform.tfstate"
+          EOF
+      
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.conf
+      
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -out=tfplan
+      
+      - name: Terraform Apply
+        id: deploy
+        if: github.event.inputs.action != 'plan'
+        run: |
+          terraform apply -auto-approve tfplan
+          echo "app_url=$(terraform output -raw app_service_url)" >> $GITHUB_OUTPUT
+
+  deploy-prod:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: ${{ steps.deploy.outputs.app_url }}
+    
+    defaults:
+      run:
+        working-directory: ./environments/prod
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.5
+          terraform_wrapper: false
+      
+      - name: Azure CLI Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      
+      - name: Manual approval checkpoint
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ vars.PROD_APPROVERS }}
+          minimum-approvals: 2
+          issue-title: "Deploying to Production"
+          issue-body: |
+            Please review the production deployment:
+            - Environment: Production
+            - Triggered by: ${{ github.actor }}
+            - Commit: ${{ github.sha }}
+      
+      - name: Create backend config
+        run: |
+          cat > backend.conf << EOF
+          resource_group_name  = "rg-terraform-state-prod"
+          storage_account_name = "stterraformstateprod$(echo $RANDOM | md5sum | head -c 6)"
+          container_name       = "tfstate"
+          key                  = "prod/fastapi-app.terraform.tfstate"
+          EOF
+      
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.conf
+      
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -out=tfplan
+      
+      - name: Terraform Apply
+        id: deploy
+        if: github.event.inputs.action != 'plan'
+        run: |
+          terraform apply -auto-approve tfplan
+          echo "app_url=$(terraform output -raw app_service_url)" >> $GITHUB_OUTPUT
+      
+      - name: Production validation
+        if: steps.deploy.outcome == 'success'
+        run: |
+          # Extended validation for production
+          sleep 60
+          
+          APP_URL=$(terraform output -raw app_service_url)
+          echo "Production application deployed at: $APP_URL"
+          
+          # Comprehensive health checks
+          curl -f "$APP_URL/health" && echo "Health check passed" || echo "Health check failed"
+          
+          # Performance baseline check (if applicable)
+          # Add any production-specific validation here

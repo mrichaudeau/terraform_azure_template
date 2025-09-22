@@ -1,0 +1,39 @@
+# FastAPI Azure Sample Application Dependencies
+
+# Core FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# Database dependencies
+sqlalchemy==2.0.23
+asyncpg==0.29.0          # PostgreSQL async driver (if needed)
+pyodbc==5.0.1            # SQL Server driver
+azure-cosmos==4.5.1      # Cosmos DB SDK
+
+# Azure SDK dependencies
+azure-identity==1.15.0   # Managed Identity support
+azure-keyvault-secrets==4.7.0
+azure-storage-blob==12.19.0
+
+# Monitoring and logging
+azure-monitor-opentelemetry-exporter==1.0.0b21
+applicationinsights==0.11.10
+opencensus-ext-azure==1.1.13
+
+# HTTP and utilities
+httpx==0.25.2
+python-multipart==0.0.6  # Form data support
+python-jose[cryptography]==3.3.0  # JWT handling
+
+# Data validation and serialization
+email-validator==2.1.0.post1
+python-dateutil==2.8.2
+
+# Environment and configuration
+python-dotenv==1.0.0
+
+# Development dependencies (optional)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2  # For testing HTTP endpoints
