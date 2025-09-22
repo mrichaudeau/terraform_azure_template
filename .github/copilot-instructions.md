@@ -222,6 +222,7 @@ When completing an infrastructure request, ensure all items are generated:
 
 ### Essential Azure References
 - **Azure Well-Architected Framework**: https://learn.microsoft.com/en-us/azure/well-architected/
+- **Azure Architecture Center**: https://learn.microsoft.com/en-us/azure/architecture/browse/
 - **AzureRM Provider Documentation**: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
 - **Azure Verified Modules**: https://azure.github.io/Azure-Verified-Modules/
 - **Azure Naming Conventions**: https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming
